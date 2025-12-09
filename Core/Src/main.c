@@ -21,7 +21,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <string.h>
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -31,7 +32,22 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define PUTCHAR_PROTOTYPE int __io_putchar(int ch)
+#define UART_PORT_HANDLE_DEBUG	huart3	// Port handle where debug msgs are shown.
+#define CONDOR_DEBUG_MODE	1	// 1 to enable debug.
+#define CONDOR_SPI_TIMEOUT_MS 	100
+#define CONDOR_UART_TIMEOUT_MS 	100
+#define CONDOR_UART_BUF_SIZE	50	// Bytes.
+#define CONDOR_ADC_DATA_SIZE	1	// Bytes (12 bits adc). 1 Byte of 16 bits.
+					// Can use 2 bytes of 8 bits too.
+#define CONDOR_ADC_VOLT_REF	3.3f	// Use float.
+#define CONDOR_ADC_COUNT_MAX	4095.0f	// 2^12 - 1. Use float.
+#define CONDOR_SPI_CS_PORT	GPIOB
+#define CONDOR_SPI_CS_PIN	GPIO_PIN_1
+#define CONDOR_DISC_PORT	GPIOB
+#define CONDOR_DISC_PIN		GPIO_PIN_5	// PB5.
+#define CONDOR_DISC_TEST_PORT	GPIOC		// User button for testing.
+#define CONDOR_DISC_TEST_PIN	GPIO_PIN_13	// User button for testing.
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -61,6 +77,14 @@ static void MX_USART3_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+volatile uint32_t event_count = 0;
+
+uint8_t spi_cs_state = GPIO_PIN_RESET;
+double adc_voltage = 0.0;
+uint16_t spi_rx_buf[CONDOR_ADC_DATA_SIZE] = {0};
+
+uint8_t new_adc_data = 0;		// To perform the ADC reading outside the ISR.
+uint8_t disc_enable = GPIO_PIN_SET; 	// To disable the discriminator while ADC is busy reading data.
 
 /* USER CODE END 0 */
 
@@ -104,11 +128,44 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+#if CONDOR_DEBUG_MODE
+	printf("Starting main loop.\n");
+#endif
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  if (new_adc_data) {
+		  // TODO: Check if amplifier gain should be used to adjust reading.
+		  // TODO: Check if 1st bit is a zero.
+#if CONDOR_DEBUG_MODE
+//		  printf("spiRx: [%u] \n", spi_rx_buf[0]);
+#endif
+		  static uint16_t adc_cnt = 0;
+		  // NOTE: Use this settings to get correct readings:
+		  // - For .ioc file: SPI mode = Receive only master use 3 bits shift.
+		  // - For .ioc file: SPI mode = Full master duplex use 2 bits shift.
+		  // - In any of the previous cases use CPHA / CPOL = 0 (set in .ioc file).
+		  // The change in SPI mode unexpectedly changes SCK polarity
+		  // (verified with logic analyzer).
+		  adc_cnt = 0;
+		  adc_cnt = spi_rx_buf[0] >> 3;
+#if CONDOR_DEBUG_MODE
+//		  printf("Adc cnt: %u\n", adc_cnt);
+#endif
+		  adc_voltage = 0.0;
+		  adc_voltage = (adc_cnt / CONDOR_ADC_COUNT_MAX) * CONDOR_ADC_VOLT_REF;
+		  spi_rx_buf[0] = 0;
+
+#if CONDOR_DEBUG_MODE
+		  if (event_count / 100 == 1) {
+			  printf("%.3f\n", adc_voltage);
+			  event_count = 0;
+		  }
+#endif
+		  new_adc_data = 0;
+	  }
   }
   /* USER CODE END 3 */
 }
@@ -342,7 +399,56 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+	// NOTE: Use the user button connected to PC13 for testing.
+//	if ((GPIO_Pin == CONDOR_DISC_PIN) || (GPIO_Pin == CONDOR_DISC_TEST_PIN)) {
+	if ((GPIO_Pin == CONDOR_DISC_PIN)) {
 
+
+		// TEST: Ignore the rest while testing interrupt propagation delay.
+		HAL_GPIO_WritePin(CONDOR_SPI_CS_PORT, CONDOR_SPI_CS_PIN, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(CONDOR_SPI_CS_PORT, CONDOR_SPI_CS_PIN, GPIO_PIN_SET);
+		return;
+		// end TEST.
+
+		event_count++;
+
+		HAL_GPIO_WritePin(CONDOR_SPI_CS_PORT, CONDOR_SPI_CS_PIN, GPIO_PIN_RESET);
+
+		// TEST: Delay for testing Max SCK time delay.
+		{
+			int lim = 150000; // 1 = 25 ns, this is not constant between power on/off cycles.
+			for (int a = 0; a < lim; a++) {
+				1;
+			}
+		}
+		// Note: CS is simulated from function generator. Discriminator output = CS in this case.
+//		HAL_StatusTypeDef status = HAL_OK;
+//		if (HAL_SPI_Receive(&hspi3, spi_rx_buf, CONDOR_ADC_DATA_SIZE, CONDOR_SPI_TIMEOUT_MS) != HAL_OK) {
+//			printf("SPI Error.\n");
+//		}
+		HAL_SPI_Receive(&hspi3, spi_rx_buf, CONDOR_ADC_DATA_SIZE, CONDOR_SPI_TIMEOUT_MS);
+
+		HAL_GPIO_WritePin(CONDOR_SPI_CS_PORT, CONDOR_SPI_CS_PIN, GPIO_PIN_SET);
+
+		new_adc_data = 1;
+	}
+}
+
+/**
+  * @brief  Retargets the C library printf function to the USART.
+  *   None
+  * @retval None
+  */
+PUTCHAR_PROTOTYPE
+{
+	/* Place your implementation of fputc here */
+	/* e.g. write a character to the USART1 and Loop until the end of transmission */
+	HAL_UART_Transmit(&UART_PORT_HANDLE_DEBUG, (uint8_t *)&ch, 1, 0xFFFF);
+
+	return ch;
+}
 /* USER CODE END 4 */
 
  /* MPU Configuration */
@@ -388,8 +494,7 @@ void Error_Handler(void)
   }
   /* USER CODE END Error_Handler_Debug */
 }
-
-#ifdef  USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.
