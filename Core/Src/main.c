@@ -44,6 +44,7 @@
 #define CONDOR_ADC_COUNT_MAX	4095.0f	// 2^12 - 1. Use float.
 #define CONDOR_SPI_CS_PORT	GPIOB
 #define CONDOR_SPI_CS_PIN	GPIO_PIN_1
+
 #define CONDOR_DISC_PORT	GPIOB
 #define CONDOR_DISC_PIN		GPIO_PIN_5	// PB5.
 #define CONDOR_DISC_TEST_PORT	GPIOC		// User button for testing.
@@ -129,6 +130,7 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 #if CONDOR_DEBUG_MODE
+  	printf("CONDOR_Caracterizacion_ADC_MAX11665_SPI\n");
 	printf("Starting main loop.\n");
 #endif
   while (1)
@@ -152,17 +154,17 @@ int main(void)
 		  adc_cnt = 0;
 		  adc_cnt = spi_rx_buf[0] >> 3;
 #if CONDOR_DEBUG_MODE
-//		  printf("Adc cnt: %u\n", adc_cnt);
+		  printf("Adc cnt: %u\n", adc_cnt);
 #endif
 		  adc_voltage = 0.0;
 		  adc_voltage = (adc_cnt / CONDOR_ADC_COUNT_MAX) * CONDOR_ADC_VOLT_REF;
 		  spi_rx_buf[0] = 0;
 
 #if CONDOR_DEBUG_MODE
-		  if (event_count / 100 == 1) {
+//		  if (event_count / 100 == 1) {
 			  printf("%.3f\n", adc_voltage);
 			  event_count = 0;
-		  }
+//		  }
 #endif
 		  new_adc_data = 0;
 	  }
@@ -401,28 +403,16 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
+//	printf("EXTI\n");
+//	printf("%X\n", GPIO_Pin);
 	// NOTE: Use the user button connected to PC13 for testing.
-//	if ((GPIO_Pin == CONDOR_DISC_PIN) || (GPIO_Pin == CONDOR_DISC_TEST_PIN)) {
-	if ((GPIO_Pin == CONDOR_DISC_PIN)) {
-
-
-		// TEST: Ignore the rest while testing interrupt propagation delay.
+	if ((GPIO_Pin == CONDOR_DISC_PIN) || (GPIO_Pin == CONDOR_DISC_TEST_PIN)) {
 		HAL_GPIO_WritePin(CONDOR_SPI_CS_PORT, CONDOR_SPI_CS_PIN, GPIO_PIN_RESET);
-		HAL_GPIO_WritePin(CONDOR_SPI_CS_PORT, CONDOR_SPI_CS_PIN, GPIO_PIN_SET);
-		return;
-		// end TEST.
 
 		event_count++;
 
 		HAL_GPIO_WritePin(CONDOR_SPI_CS_PORT, CONDOR_SPI_CS_PIN, GPIO_PIN_RESET);
 
-		// TEST: Delay for testing Max SCK time delay.
-		{
-			int lim = 150000; // 1 = 25 ns, this is not constant between power on/off cycles.
-			for (int a = 0; a < lim; a++) {
-				1;
-			}
-		}
 		// Note: CS is simulated from function generator. Discriminator output = CS in this case.
 //		HAL_StatusTypeDef status = HAL_OK;
 //		if (HAL_SPI_Receive(&hspi3, spi_rx_buf, CONDOR_ADC_DATA_SIZE, CONDOR_SPI_TIMEOUT_MS) != HAL_OK) {
